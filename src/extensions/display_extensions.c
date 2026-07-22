@@ -96,6 +96,7 @@ static lbm_uint symbol_rotate = 0;
 static lbm_uint symbol_resolution = 0;
 static lbm_uint symbol_tile = 0;
 static lbm_uint symbol_clip = 0;
+static lbm_uint symbol_aa = 0;
 
 
 static lbm_uint symbol_regular = 0;
@@ -330,6 +331,7 @@ static bool register_symbols(void) {
   res = res && lbm_add_symbol_const("resolution", &symbol_resolution);
   res = res && lbm_add_symbol_const("tile", &symbol_tile);
   res = res && lbm_add_symbol_const("clip", &symbol_clip);
+  res = res && lbm_add_symbol_const("aa", &symbol_aa);
 
   res = res && lbm_add_symbol_const("regular", &symbol_regular);
   res = res && lbm_add_symbol_const("gradient_x", &symbol_gradient_x);
@@ -1128,8 +1130,153 @@ static void circle_ring(image_buffer_t *img, int c_x, int c_y, int radius, int t
   }
 }
 
-// Filled rounded rectangle, boundary-cursor version.
-static void fill_rounded_rectangle(image_buffer_t *img, int x, int y, int width, int height, int radius, uint32_t color, uint8_t alpha) {
+
+//Coverage AA for rounded rectangles.
+
+//The integer boundary cursor still decides the spans, as in the original
+//renderer. Only the two pixels on each corner boundary are blended using a
+//small fixed coverage mask. Fractional coverage is limited to the boundary,
+//while the interior remains fast span writes.
+
+static uint8_t circle_pixel_coverage(int px, int py, int cx, int cy, int radius) {
+  static const int samples[4] = {1, 3, 5, 7};
+  int covered = 0;
+  int radius_sq = radius * radius * 64;
+
+  for (int sy = 0; sy < 4; sy++) {
+    for (int sx = 0; sx < 4; sx++) {
+      int dx = px * 8 + samples[sx] - cx * 8;
+      int dy = py * 8 + samples[sy] - cy * 8;
+      if (dx * dx + dy * dy <= radius_sq) covered++;
+    }
+  }
+  return (uint8_t)((covered * 255 + 8) / 16);
+}
+
+static void rounded_corner_edge(image_buffer_t *img, int px, int py,
+                                int cx, int cy, int radius,
+                                uint32_t color, uint8_t alpha) {
+  uint8_t coverage = circle_pixel_coverage(px, py, cx, cy, radius);
+  if (coverage != 0) {
+    uint8_t edge_alpha = (uint8_t)(((uint32_t)alpha * coverage + 127u) / 255u);
+    putpixel(img, px, py, color, edge_alpha);
+  }
+}
+
+static void rounded_aa_row(image_buffer_t *img, int x, int y, int width, int inset,
+                           int left_cx, int right_cx, int cy, int radius,
+                           uint32_t color, uint8_t alpha) {
+  int start = x + inset;
+  int end = x + width - inset - 1;
+
+  if (start > end) return;
+  if (end - start > 1) h_line(img, start + 1, y, end - start - 1, color, alpha);
+  rounded_corner_edge(img, start - 1, y, left_cx, cy, radius, color, alpha);
+  rounded_corner_edge(img, start, y, left_cx, cy, radius, color, alpha);
+  rounded_corner_edge(img, end, y, right_cx, cy, radius, color, alpha);
+  rounded_corner_edge(img, end + 1, y, right_cx, cy, radius, color, alpha);
+}
+
+static uint8_t annulus_pixel_coverage(int px, int py, int cx, int cy,
+                                      int outer_radius, int inner_radius) {
+  static const int samples[4] = {1, 3, 5, 7};
+  int covered = 0;
+  int outer_sq = outer_radius * outer_radius * 64;
+  int inner_sq = inner_radius * inner_radius * 64;
+
+  for (int sy = 0; sy < 4; sy++) {
+    for (int sx = 0; sx < 4; sx++) {
+      int dx = px * 8 + samples[sx] - cx * 8;
+      int dy = py * 8 + samples[sy] - cy * 8;
+      int dist_sq = dx * dx + dy * dy;
+      if (dist_sq <= outer_sq && dist_sq >= inner_sq) covered++;
+    }
+  }
+  return (uint8_t)((covered * 255 + 8) / 16);
+}
+
+static void annulus_span_aa(image_buffer_t *img, int start, int end, int y,
+                            int cx, int cy, int outer_radius, int inner_radius,
+                            uint32_t color, uint8_t alpha) {
+  if (start > end) return;
+  if (end - start > 1) h_line(img, start + 1, y, end - start - 1, color, alpha);
+
+  int samples[4] = {start - 1, start, end, end + 1};
+  for (int i = 0; i < 4; i++) {
+    if (i > 0 && samples[i] == samples[i - 1]) continue;
+    uint8_t coverage = annulus_pixel_coverage(samples[i], y, cx, cy,
+                                               outer_radius, inner_radius);
+    if (coverage != 0) {
+      uint8_t edge_alpha = (uint8_t)(((uint32_t)alpha * coverage + 127u) / 255u);
+      putpixel(img, samples[i], y, color, edge_alpha);
+    }
+  }
+}
+
+static void rounded_rectangle_outline_aa(image_buffer_t *img, int x, int y,
+                                         int width, int height, int radius,
+                                         int thickness, uint32_t color, uint8_t alpha) {
+  if (radius > width / 2) radius = width / 2;
+  if (radius > height / 2) radius = height / 2;
+
+  int stroke = thickness > 0 ? thickness : 1;
+  if (radius <= 0) {
+    for (int i = 0; i < stroke; i++) {
+      h_line(img, x + i, y + i, width - 2 * i, color, alpha);
+      h_line(img, x + i, y + height - 1 - i, width - 2 * i, color, alpha);
+      v_line(img, x + i, y + i, height - 2 * i, color, alpha);
+      v_line(img, x + width - 1 - i, y + i, height - 2 * i, color, alpha);
+    }
+    return;
+  }
+
+  if (stroke > radius) stroke = radius;
+  int inner_radius = radius - stroke;
+  int left_cx = x + radius;
+  int right_cx = x + width - radius;
+  int top_cy = y + radius;
+  int bottom_cy = y + height - radius;
+
+  for (int i = 0; i < stroke; i++) {
+    h_line(img, left_cx, y + i, right_cx - left_cx, color, alpha);
+    h_line(img, left_cx, y + height - 1 - i, right_cx - left_cx, color, alpha);
+  }
+  for (int row = top_cy; row < bottom_cy; row++) {
+    for (int i = 0; i < stroke; i++) {
+      putpixel(img, x + i, row, color, alpha);
+      putpixel(img, x + width - 1 - i, row, color, alpha);
+    }
+  }
+
+  int outer_sq = radius * radius * 4;
+  int inner_sq = inner_radius * inner_radius * 4;
+  int xo = -radius;
+  int xi = -inner_radius;
+  for (int y0 = 0; y0 < radius; y0++) {
+    int row_sq = (2 * y0 + 1) * (2 * y0 + 1);
+    circle_boundary_advance(&xo, row_sq, outer_sq);
+    bool has_gap = inner_radius > 0 && y0 < inner_radius;
+    if (has_gap) circle_boundary_advance(&xi, row_sq, inner_sq);
+
+    int top_y = top_cy - y0 - 1;
+    int bottom_y = bottom_cy + y0;
+    int left_end = has_gap ? left_cx + xi - 1 : left_cx - 1;
+    int right_start = has_gap ? right_cx - xi : right_cx;
+    annulus_span_aa(img, left_cx + xo, left_end, top_y, left_cx, top_cy,
+                    radius, inner_radius, color, alpha);
+    annulus_span_aa(img, right_start, right_cx - xo - 1, top_y, right_cx, top_cy,
+                    radius, inner_radius, color, alpha);
+    annulus_span_aa(img, left_cx + xo, left_end, bottom_y, left_cx, bottom_cy,
+                    radius, inner_radius, color, alpha);
+    annulus_span_aa(img, right_start, right_cx - xo - 1, bottom_y, right_cx, bottom_cy,
+                    radius, inner_radius, color, alpha);
+  }
+}
+
+// Filled rounded rectangle, boundary-cursor version. The hard path is kept
+// byte-for-byte compatible. AA only affects the four rounded corners.
+static void fill_rounded_rectangle(image_buffer_t *img, int x, int y, int width, int height,
+                                   int radius, uint32_t color, uint8_t alpha, bool antialias) {
   if (radius > width / 2) radius = width / 2;
   if (radius > height / 2) radius = height / 2;
 
@@ -1150,8 +1297,17 @@ static void fill_rounded_rectangle(image_buffer_t *img, int x, int y, int width,
 
     int row_top = radius - 1 - y0;
     int row_bottom = height - radius + y0;
-    h_line(img, x + inset, y + row_top, width - 2 * inset, color, alpha);
-    h_line(img, x + inset, y + row_bottom, width - 2 * inset, color, alpha);
+    if (antialias) {
+      rounded_aa_row(img, x, y + row_top, width, inset,
+                     x + radius, x + width - radius, y + radius, radius,
+                     color, alpha);
+      rounded_aa_row(img, x, y + row_bottom, width, inset,
+                     x + radius, x + width - radius, y + height - radius, radius,
+                     color, alpha);
+    } else {
+      h_line(img, x + inset, y + row_top, width - 2 * inset, color, alpha);
+      h_line(img, x + inset, y + row_bottom, width - 2 * inset, color, alpha);
+    }
   }
 
   for (int row = radius; row < height - radius; row++) {
@@ -1926,6 +2082,7 @@ typedef struct {
   attr_t attr_resolution;
   attr_t attr_tile;
   attr_t attr_clip;
+  attr_t attr_aa;
 } img_args_t;
 
 static img_args_t decode_args(lbm_value *args, lbm_uint argn, int num_expected) {
@@ -2005,6 +2162,9 @@ static img_args_t decode_args(lbm_value *args, lbm_uint argn, int num_expected) 
             } else if (lbm_dec_sym(arg) == symbol_clip) {
               attr_now = &res.attr_clip;
               attr_now->arg_num = 4;
+            } else if (lbm_dec_sym(arg) == symbol_aa) {
+              attr_now = &res.attr_aa;
+              attr_now->arg_num = 1;
             }
             else {
               return res;
@@ -2563,10 +2723,17 @@ static lbm_value ext_rectangle(lbm_value *args, lbm_uint argn) {
   int dot1 = lbm_dec_as_i32(arg_dec.attr_dotted.args[0]);
   int dot2 = lbm_dec_as_i32(arg_dec.attr_dotted.args[1]);
   int resolution = lbm_dec_as_i32(arg_dec.attr_resolution.args[0]);
+  bool antialias = arg_dec.attr_aa.is_valid &&
+                   lbm_dec_as_i32(arg_dec.attr_aa.args[0]) != 0 &&
+                   (img->fmt == rgb332 || img->fmt == rgb565 || img->fmt == rgb888);
 
   if (arg_dec.attr_rounded.is_valid) {
     if (arg_dec.attr_filled.is_valid) {
-      fill_rounded_rectangle(img, x, y, width, height, rad, color, arg_dec.alpha);
+      fill_rounded_rectangle(img, x, y, width, height, rad, color, arg_dec.alpha, antialias);
+    } else if (antialias && dot1 == 0 && dot2 == 0) {
+      int normalized_thickness = (thickness / 2) * 2;
+      rounded_rectangle_outline_aa(img, x, y, width, height, rad,
+                                   normalized_thickness, color, arg_dec.alpha);
     } else {
       // Remember to change these to use the rounded attribute,
       // when/if line supports it!
