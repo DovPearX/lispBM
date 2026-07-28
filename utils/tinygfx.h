@@ -67,7 +67,6 @@ typedef struct {
   bool mirrored;
   COLOR_TYPE type;
   uint32_t *precalc;
-  uint8_t alpha;
 } color_t;
 
 ////////////////////////////////////////////////////////////
@@ -110,7 +109,7 @@ uint32_t image_dims_to_size_bytes(color_format_t fmt, uint16_t width, uint16_t h
 //  PIXEL BUFFER PRIMITIVES
 
 void     image_buffer_clear(image_buffer_t *img, uint32_t cc);
-void     putpixel(image_buffer_t *img, int x, int y, uint32_t c, uint8_t alpha);
+void     putpixel(image_buffer_t *img, int x, int y, uint32_t c);
 uint32_t getpixel(image_buffer_t *img, int x, int y);
 
 ////////////////////////////////////////////////////////////
@@ -122,7 +121,7 @@ uint32_t getpixel(image_buffer_t *img, int x, int y);
 // http://homepages.enterprise.net/murphy/thickline/index.html
 // https://github.com/ArminJo/STMF3-Discovery-Demos/blob/master/lib/BlueDisplay/LocalGUI/ThickLine.hpp
 void tinygfx_line(image_buffer_t *img, int x0, int y0, int x1, int y1,
-                   int thickness, int dot1, int dot2, uint32_t c, uint8_t alpha);
+                   int thickness, int dot1, int dot2, uint32_t c);
 
 ////////////////////////////////////////////////////////////
 //  CIRCLES AND ARCS
@@ -138,12 +137,11 @@ typedef struct {
   int dot2;
   int resolution;
   uint32_t color;
-  uint8_t alpha;
 } arc_params_t;
 
-void tinygfx_fill_circle(image_buffer_t *img, int x, int y, int radius, uint32_t color, uint8_t alpha);
+void tinygfx_fill_circle(image_buffer_t *img, int x, int y, int radius, uint32_t color);
 // thickness extends inwards from the given radius circle
-void tinygfx_circle(image_buffer_t *img, int x, int y, int radius, int thickness, uint32_t color, uint8_t alpha);
+void tinygfx_circle(image_buffer_t *img, int x, int y, int radius, int thickness, uint32_t color);
 
 void tinygfx_arc(image_buffer_t *img, int c_x, int c_y, int radius, float angle0, float angle1,
                   const arc_params_t *p);
@@ -152,26 +150,26 @@ void tinygfx_arc(image_buffer_t *img, int c_x, int c_y, int radius, float angle0
 //  RECTANGLES
 
 // Axis-aligned strip of exactly `thickness` pixels, extending down/right from (x, y).
-void tinygfx_thick_hline(image_buffer_t *img, int x, int y, int len, int thickness, uint32_t color, uint8_t alpha);
-void tinygfx_thick_vline(image_buffer_t *img, int x, int y, int len, int thickness, uint32_t color, uint8_t alpha);
+void tinygfx_thick_hline(image_buffer_t *img, int x, int y, int len, int thickness, uint32_t color);
+void tinygfx_thick_vline(image_buffer_t *img, int x, int y, int len, int thickness, uint32_t color);
 
 // thickness extends inwards from the given rectangle edge.
 void tinygfx_rectangle(image_buffer_t *img, int x, int y, int width, int height,
-                        bool fill, int thickness, int dot1, int dot2, uint32_t color, uint8_t alpha);
+                        bool fill, int thickness, int dot1, int dot2, uint32_t color);
 
 void tinygfx_fill_rounded_rectangle(image_buffer_t *img, int x, int y, int width, int height,
-                                     int radius, uint32_t color, uint8_t alpha);
+                                     int radius, uint32_t color);
 
 // thickness extends inwards; dot1>0 for a dotted border.
 void tinygfx_rounded_rectangle(image_buffer_t *img, int x, int y, int width, int height,
                                 int radius, int thickness, int dot1, int dot2, int resolution,
-                                uint32_t color, uint8_t alpha);
+                                uint32_t color);
 
 ////////////////////////////////////////////////////////////
 //  TRIANGLES
 
 void tinygfx_fill_triangle(image_buffer_t *img, int x0, int y0, int x1, int y1, int x2, int y2,
-                            uint32_t color, uint8_t alpha);
+                            uint32_t color);
 
 ////////////////////////////////////////////////////////////
 //  TEXT

@@ -68,7 +68,6 @@ static lbm_uint symbol_color_1 = 0;
 static lbm_uint symbol_width = 0;
 static lbm_uint symbol_offset = 0;
 static lbm_uint symbol_repeat_type = 0;
-static lbm_uint symbol_alpha = 0;
 
 static lbm_uint symbol_down = 0;
 static lbm_uint symbol_up = 0;
@@ -138,7 +137,7 @@ static inline bool is_color(uint8_t *data, lbm_uint size) {
 }
 
 
-static lbm_value color_allocate(COLOR_TYPE type, int32_t color1, int32_t color2, uint16_t param1, uint16_t param2, bool mirrored, uint8_t alpha) {
+static lbm_value color_allocate(COLOR_TYPE type, int32_t color1, int32_t color2, uint16_t param1, uint16_t param2, bool mirrored) {
   color_t *color = lbm_malloc(sizeof(color_t));
   if (!color) {
     return ENC_SYM_MERROR;
@@ -163,7 +162,6 @@ static lbm_value color_allocate(COLOR_TYPE type, int32_t color1, int32_t color2,
     color->param1 = param1;
     color->param2 = param2;
     color->mirrored = mirrored;
-    color->alpha = alpha;
     color->precalc = pre;
 
     if (pre) {
@@ -278,7 +276,6 @@ static bool register_symbols(void) {
   res = res && lbm_add_symbol_const("width", &symbol_width);
   res = res && lbm_add_symbol_const("offset", &symbol_offset);
   res = res && lbm_add_symbol_const("repeat-type", &symbol_repeat_type);
-  res = res && lbm_add_symbol_const("alpha", &symbol_alpha);
 
   res = res && lbm_add_symbol_const("down", &symbol_down);
   res = res && lbm_add_symbol_const("up", &symbol_up);
@@ -383,7 +380,6 @@ typedef struct {
   bool is_valid;
   image_buffer_t img;
   lbm_value args[ARG_MAX_NUM];
-  uint8_t alpha;
   attr_t attr_thickness;
   attr_t attr_filled;
   attr_t attr_rounded;
@@ -400,7 +396,6 @@ static img_args_t decode_args(lbm_value *args, lbm_uint argn, int num_expected) 
   img_args_t res;
   memset(&res, 0, sizeof(res));
   res.is_valid = false;
-  res.alpha = 255;
 
   lbm_array_header_t *arr;
   if (argn >= 1 && (arr = get_image_buffer(args[0]))) {
@@ -419,7 +414,6 @@ static img_args_t decode_args(lbm_value *args, lbm_uint argn, int num_expected) 
         if (clr && clr->type == COLOR_REGULAR &&
             num_dec == num_expected - 1) {
           res.args[num_dec] = lbm_enc_u32((uint32_t)clr->color1);
-          res.alpha = clr->alpha;
           num_dec++;
           if (num_dec >= ARG_MAX_NUM) return res;
           continue;
@@ -593,7 +587,7 @@ static lbm_value ext_is_image_buffer(lbm_value *args, lbm_uint argn) {
 static lbm_value ext_color(lbm_value *args, lbm_uint argn) {
   lbm_value res = ENC_SYM_TERROR;
 
-  if (argn >= 2 && argn <= 7 &&
+  if (argn >= 2 && argn <= 6 &&
       lbm_is_symbol(args[0]) &&
       lbm_is_number(args[1])) {
 
@@ -629,7 +623,6 @@ static lbm_value ext_color(lbm_value *args, lbm_uint argn) {
     }
 
     bool mirrored = false;
-    lbm_uint alpha_arg = argn;
 
     if (argn >= 6) {
       if (lbm_is_symbol(args[5])) {
@@ -641,9 +634,6 @@ static lbm_value ext_color(lbm_value *args, lbm_uint argn) {
         } else {
           return ENC_SYM_TERROR;
         }
-        alpha_arg = 6;
-      } else if (argn == 6 && lbm_is_number(args[5])) {
-        alpha_arg = 5;
       } else {
         return ENC_SYM_TERROR;
       }
@@ -664,24 +654,8 @@ static lbm_value ext_color(lbm_value *args, lbm_uint argn) {
       return ENC_SYM_TERROR;
     }
 
-    if (t == COLOR_REGULAR && argn == 3) {
-      alpha_arg = 2;
-    }
-
-    uint8_t alpha = 255;
-    if (alpha_arg < argn) {
-      if (lbm_is_number(args[alpha_arg])) {
-        int32_t a = lbm_dec_as_i32(args[alpha_arg]);
-        if (a < 0) a = 0;
-        if (a > 255) a = 255;
-        alpha = (uint8_t)a;
-      } else {
-        return ENC_SYM_TERROR;
-      }
-    }
-
     // Maybe check if param is in ranges first ?
-    res = color_allocate(t, color1, color2, (uint16_t)param1, (uint16_t)param2, mirrored, alpha);
+    res = color_allocate(t, color1, color2, (uint16_t)param1, (uint16_t)param2, mirrored);
   }
 
   return res;
@@ -731,14 +705,6 @@ static lbm_value ext_color_set(lbm_value *args, lbm_uint argn) {
     } else {
       return ENC_SYM_TERROR;
     }
-  } else if (prop == symbol_alpha) {
-    if (!lbm_is_number(args[2])) {
-      return ENC_SYM_TERROR;
-    }
-    int32_t a = lbm_dec_as_i32(args[2]);
-    if (a < 0) a = 0;
-    if (a > 255) a = 255;
-    color->alpha = (uint8_t)a;
   } else {
     return ENC_SYM_TERROR;
   }
@@ -780,8 +746,6 @@ static lbm_value ext_color_get(lbm_value *args, lbm_uint argn) {
       return ENC_SYM_TERROR;
     }
     return lbm_enc_sym(color->mirrored ? symbol_mirrored : symbol_repeat);
-  } else if (prop == symbol_alpha) {
-    return lbm_enc_u32((uint32_t)color->alpha);
   } else {
     return ENC_SYM_TERROR;
   }
@@ -858,8 +822,7 @@ static lbm_value ext_putpixel(lbm_value *args, lbm_uint argn) {
   putpixel(&arg_dec.img,
            lbm_dec_as_i32(arg_dec.args[0]),
            lbm_dec_as_i32(arg_dec.args[1]),
-           lbm_dec_as_u32(arg_dec.args[2]),
-           arg_dec.alpha);
+           lbm_dec_as_u32(arg_dec.args[2]));
   return ENC_SYM_TRUE;
 }
 
@@ -892,8 +855,7 @@ static lbm_value ext_line(lbm_value *args, lbm_uint argn) {
        lbm_dec_as_i32(arg_dec.attr_thickness.args[0]),
        lbm_dec_as_i32(arg_dec.attr_dotted.args[0]),
        lbm_dec_as_i32(arg_dec.attr_dotted.args[1]),
-       lbm_dec_as_u32(arg_dec.args[4]),
-       arg_dec.alpha);
+       lbm_dec_as_u32(arg_dec.args[4]));
 
   return ENC_SYM_TRUE;
 }
@@ -912,7 +874,6 @@ static arc_params_t make_arc_params(const img_args_t *a, bool rounded, bool sect
     .dot2       = lbm_dec_as_i32(a->attr_dotted.args[1]),
     .resolution = lbm_dec_as_i32(a->attr_resolution.args[0]),
     .color      = lbm_dec_as_u32(color_arg),
-    .alpha      = a->alpha,
   };
   return p;
 }
@@ -930,8 +891,7 @@ static lbm_value ext_circle(lbm_value *args, lbm_uint argn) {
                 lbm_dec_as_i32(arg_dec.args[0]),
                 lbm_dec_as_i32(arg_dec.args[1]),
                 lbm_dec_as_i32(arg_dec.args[2]),
-                lbm_dec_as_u32(arg_dec.args[3]),
-                arg_dec.alpha);
+                lbm_dec_as_u32(arg_dec.args[3]));
   } else if (arg_dec.attr_dotted.is_valid) {
     // rounded here currently does nothing as the line function doesn't
     // support square ends.
@@ -948,8 +908,7 @@ static lbm_value ext_circle(lbm_value *args, lbm_uint argn) {
            lbm_dec_as_i32(arg_dec.args[1]),
            lbm_dec_as_i32(arg_dec.args[2]),
            lbm_dec_as_i32(arg_dec.attr_thickness.args[0]),
-           lbm_dec_as_u32(arg_dec.args[3]),
-           arg_dec.alpha);
+           lbm_dec_as_u32(arg_dec.args[3]));
   }
 
   return ENC_SYM_TRUE;
@@ -1038,9 +997,9 @@ static lbm_value ext_rectangle(lbm_value *args, lbm_uint argn) {
 
   if (arg_dec.attr_rounded.is_valid) {
     if (arg_dec.attr_filled.is_valid) {
-      tinygfx_fill_rounded_rectangle(img, x, y, width, height, rad, color, arg_dec.alpha);
+      tinygfx_fill_rounded_rectangle(img, x, y, width, height, rad, color);
     } else {
-      tinygfx_rounded_rectangle(img, x, y, width, height, rad, thickness, dot1, dot2, resolution, color, arg_dec.alpha);
+      tinygfx_rounded_rectangle(img, x, y, width, height, rad, thickness, dot1, dot2, resolution, color);
     }
   } else {
     tinygfx_rectangle(img,
@@ -1049,7 +1008,7 @@ static lbm_value ext_rectangle(lbm_value *args, lbm_uint argn) {
               arg_dec.attr_filled.is_valid,
               thickness,
               dot1, dot2,
-              color, arg_dec.alpha);
+              color);
   }
 
   return ENC_SYM_TRUE;
@@ -1076,11 +1035,11 @@ static lbm_value ext_triangle(lbm_value *args, lbm_uint argn) {
   uint32_t color = lbm_dec_as_u32(arg_dec.args[6]);
 
   if (arg_dec.attr_filled.is_valid) {
-    tinygfx_fill_triangle(img, x0, y0, x1, y1, x2, y2, color, arg_dec.alpha);
+    tinygfx_fill_triangle(img, x0, y0, x1, y1, x2, y2, color);
   } else {
-    tinygfx_line(img, x0, y0, x1, y1, thickness, dot1, dot2, color, arg_dec.alpha);
-    tinygfx_line(img, x1, y1, x2, y2, thickness, dot1, dot2, color, arg_dec.alpha);
-    tinygfx_line(img, x2, y2, x0, y0, thickness, dot1, dot2, color, arg_dec.alpha);
+    tinygfx_line(img, x0, y0, x1, y1, thickness, dot1, dot2, color);
+    tinygfx_line(img, x1, y1, x2, y2, thickness, dot1, dot2, color);
+    tinygfx_line(img, x2, y2, x0, y0, thickness, dot1, dot2, color);
   }
 
   return ENC_SYM_TRUE;
@@ -1259,7 +1218,8 @@ static lbm_value ext_blit(lbm_value *args, lbm_uint argn) {
     int32_t transparent_color = lbm_dec_as_i32(arg_dec.args[2]);
 
     if (!arg_dec.transform_attr_present) {
-      tinygfx_blit(&dest_buf, &arg_dec.img, dest_x, dest_y, transparent_color);
+      tinygfx_blit(&dest_buf, &arg_dec.img,
+                   dest_x, dest_y, transparent_color);
     } else {
       blit_transform_t transform = {
         .rot_x = lbm_dec_as_float(arg_dec.attr_rotate.args[0]),
@@ -1273,7 +1233,8 @@ static lbm_value ext_blit(lbm_value *args, lbm_uint argn) {
         .clip_h = arg_dec.attr_clip.is_valid ? lbm_dec_as_i32(arg_dec.attr_clip.args[3]) : dest_buf.height,
       };
 
-      tinygfx_blit_transform(&dest_buf, &arg_dec.img, dest_x, dest_y, transform, transparent_color);
+      tinygfx_blit_transform(&dest_buf, &arg_dec.img,
+                             dest_x, dest_y, transform, transparent_color);
     }
     res = ENC_SYM_TRUE;
   }
